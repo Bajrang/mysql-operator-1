@@ -43,7 +43,7 @@ const (
 
 // BaseConfig contains information related with the pod.
 type BaseConfig struct {
-	StopCh <-chan struct{}
+	Stop <-chan struct{}
 
 	// Hostname represents the pod hostname
 	Hostname string
@@ -107,7 +107,7 @@ func (cfg *BaseConfig) getMasterHost() string {
 // NewBasicConfig returns a pointer to BaseConfig configured from environment variables
 func NewBasicConfig(stop <-chan struct{}) *BaseConfig {
 	cfg := &BaseConfig{
-		StopCh:      stop,
+		Stop:        stop,
 		Hostname:    getEnvValue("HOSTNAME"),
 		ClusterName: getEnvValue("MY_CLUSTER_NAME"),
 		Namespace:   getEnvValue("MY_NAMESPACE"),
@@ -184,10 +184,17 @@ type MysqlConfig struct {
 	// orchestrator credentials
 	OrchestratorUser     string
 	OrchestratorPassword string
+
+	// MySQL and app related credentials
+	MysqlRootPassword *string
+	MysqlUser         *string
+	MysqlPassword     *string
+	MysqlDatabase     *string
 }
 
 // NewMysqlConfig returns a pointer to MysqlConfig
-func NewMysqlConfig(cfg *BaseConfig) *MysqlConfig {
+func NewMysqlConfig(cfg *BaseConfig) (*MysqlConfig, error) {
+	sw := NewSecretWatcher("path") // TODO
 	mycfg := &MysqlConfig{
 		BaseConfig: *cfg,
 
@@ -199,15 +206,25 @@ func NewMysqlConfig(cfg *BaseConfig) *MysqlConfig {
 
 		OrchestratorUser:     getEnvValue("MYSQL_ORC_TOPOLOGY_USER"),
 		OrchestratorPassword: getEnvValue("MYSQL_ORC_TOPOLOGY_PASSWORD"),
+
+		MysqlUser:         sw.WatchFor("MYSQL_USER"),
+		MysqlPassword:     sw.WatchFor("MYSQL_PASSWORD"),
+		MysqlDatabase:     sw.WatchFor("MYSQL_DATABASE"),
+		MysqlRootPassword: sw.WatchFor("MYSQL_ROOT_PASSWORD"),
 	}
 
 	// set connection DSN to MySQL
 	var err error
 	if mycfg.MysqlDSN, err = getMySQLConnectionString(); err != nil {
 		log.Error(err, "get MySQL DSN")
+		return nil, err
 	}
 
-	return mycfg
+	if err := sw.Start(cfg.Stop); err != nil {
+		return nil, err
+	}
+
+	return mycfg, nil
 }
 
 // getMySQLConnectionString returns the mysql DSN
