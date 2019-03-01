@@ -26,6 +26,9 @@ import (
 )
 
 var (
+	// MysqlServerIDOffset represents the offset with which all server ids are shifted from 0
+	MysqlServerIDOffset = 100
+
 	// MysqlPort represents port on which mysql works
 	MysqlPort = strconv.Itoa(constants.MysqlPort)
 
@@ -59,6 +62,9 @@ var (
 	ServerProbeEndpoint = constants.SidecarServerProbePath
 	// ServerBackupEndpoint is the http server endpoint for backups
 	ServerBackupEndpoint = "/xbackup"
+
+	// SecretMountPath is the path to directory where the secret is mounted
+	SecretMountPath = constants.SecretMountPath
 )
 
 const (

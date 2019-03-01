@@ -18,38 +18,15 @@ package app
 
 import (
 	"bufio"
-	"database/sql"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 
-	// add mysql driver
-	_ "github.com/go-sql-driver/mysql"
 	logf "sigs.k8s.io/controller-runtime/pkg/runtime/log"
 )
 
 var log = logf.Log.WithName("sidecar.app")
-
-// RunQuery executes a query
-func RunQuery(cfg *MysqlConfig, q string, args ...interface{}) error {
-	if cfg.MysqlDSN == nil {
-		log.Info("could not get mysql connection DSN")
-		return fmt.Errorf("no DSN specified")
-	}
-
-	db, err := sql.Open("mysql", *cfg.MysqlDSN)
-	if err != nil {
-		return err
-	}
-
-	log.V(4).Info("running query", "query", q, "args", args)
-	if _, err := db.Exec(q, args...); err != nil {
-		return err
-	}
-
-	return nil
-}
 
 // CopyFile the src file to dst. Any existing file will be overwritten and will not
 // copy file attributes.

@@ -22,6 +22,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-ini/ini"
 	// add mysql driver
@@ -76,7 +77,7 @@ type BaseConfig struct {
 // GetHostFor returns the pod hostname for given MySQL server id
 func (cfg *BaseConfig) GetHostFor(id int) string {
 	base := mysqlcluster.GetNameForResource(mysqlcluster.StatefulSet, cfg.ClusterName)
-	return fmt.Sprintf("%s-%d.%s.%s", base, id-100, cfg.ServiceName, cfg.Namespace)
+	return fmt.Sprintf("%s-%d.%s.%s", base, id-MysqlServerIDOffset, cfg.ServiceName, cfg.Namespace)
 }
 
 func (cfg *BaseConfig) getOrcClient() orc.Interface {
@@ -99,9 +100,9 @@ func (cfg *BaseConfig) getMasterHost() string {
 	}
 
 	log.V(-1).Info("failed to obtain master from orchestrator, go for default master",
-		"master", cfg.GetHostFor(100))
-	return cfg.GetHostFor(100)
+		"master", cfg.GetHostFor(MysqlServerIDOffset))
 
+	return cfg.GetHostFor(MysqlServerIDOffset)
 }
 
 // NewBasicConfig returns a pointer to BaseConfig configured from environment variables
@@ -120,18 +121,18 @@ func NewBasicConfig(stop <-chan struct{}) *BaseConfig {
 		BackupPassword: getEnvValue("MYSQL_BACKUP_PASSWORD"),
 	}
 
+	// get server id
+	ordinal := getOrdinalFromHostname(cfg.Hostname)
+	cfg.ServerID = ordinal + MysqlServerIDOffset
+
 	// get master host
 	cfg.MasterHost = cfg.getMasterHost()
 
 	// set node role
 	cfg.NodeRole = SlaveNode
-	if cfg.Hostname == cfg.MasterHost {
+	if cfg.GetHostFor(cfg.ServerID) == cfg.MasterHost {
 		cfg.NodeRole = MasterNode
 	}
-
-	// get server id
-	ordinal := getOrdinalFromHostname(cfg.Hostname)
-	cfg.ServerID = ordinal + 100
 
 	return cfg
 }
@@ -182,49 +183,52 @@ type MysqlConfig struct {
 	MetricsPassword string
 
 	// orchestrator credentials
-	OrchestratorUser     string
-	OrchestratorPassword string
+	OrchestratorUser     UpdatableString
+	OrchestratorPassword UpdatableString
 
 	// MySQL and app related credentials
-	MysqlRootPassword *string
-	MysqlUser         *string
-	MysqlPassword     *string
-	MysqlDatabase     *string
+	MysqlRootPassword UpdatableString
+	MysqlUser         UpdatableString
+	MysqlPassword     UpdatableString
+	MysqlDatabase     UpdatableString
+
+	ReconcileTime time.Duration
 }
 
 // NewMysqlConfig returns a pointer to MysqlConfig
-func NewMysqlConfig(cfg *BaseConfig) (*MysqlConfig, error) {
-	sw := NewSecretWatcher("path") // TODO
+func NewMysqlConfig(cfg *BaseConfig) *MysqlConfig {
+	absPath := func(key string) string {
+		// TODO: fill this path
+		return path.Join(SecretMountPath, key)
+	}
 	mycfg := &MysqlConfig{
 		BaseConfig: *cfg,
 
-		ReplicationUser:     getEnvValue("MYSQL_REPLICATION_USER"),
-		ReplicationPassword: getEnvValue("MYSQL_REPLICATION_PASSWORD"),
+		ReplicationUser:     getEnvValue("REPLICATION_USER"),
+		ReplicationPassword: getEnvValue("REPLICATION_PASSWORD"),
 
 		MetricsUser:     getEnvValue("MYSQL_METRICS_EXPORTER_USER"),
 		MetricsPassword: getEnvValue("MYSQL_METRICS_EXPORTER_PASSWORD"),
 
-		OrchestratorUser:     getEnvValue("MYSQL_ORC_TOPOLOGY_USER"),
-		OrchestratorPassword: getEnvValue("MYSQL_ORC_TOPOLOGY_PASSWORD"),
+		OrchestratorUser:     GetValueFromFile(absPath("ORC_TOPOLOGY_USER")),
+		OrchestratorPassword: GetValueFromFile(absPath("ORC_TOPOLOGY_PASSWORD")),
 
-		MysqlUser:         sw.WatchFor("MYSQL_USER"),
-		MysqlPassword:     sw.WatchFor("MYSQL_PASSWORD"),
-		MysqlDatabase:     sw.WatchFor("MYSQL_DATABASE"),
-		MysqlRootPassword: sw.WatchFor("MYSQL_ROOT_PASSWORD"),
+		MysqlUser:         GetValueFromFile(absPath("USER")),
+		MysqlPassword:     GetValueFromFile(absPath("PASSWORD")),
+		MysqlDatabase:     GetValueFromFile(absPath("DATABASE")),
+		MysqlRootPassword: GetValueFromFile(absPath("ROOT_PASSWORD")),
+
+		ReconcileTime: 10 * time.Second,
 	}
 
 	// set connection DSN to MySQL
 	var err error
 	if mycfg.MysqlDSN, err = getMySQLConnectionString(); err != nil {
 		log.Error(err, "get MySQL DSN")
-		return nil, err
+		return nil
 	}
 
-	if err := sw.Start(cfg.Stop); err != nil {
-		return nil, err
-	}
-
-	return mycfg, nil
+	return mycfg
 }
 
 // getMySQLConnectionString returns the mysql DSN

@@ -18,107 +18,117 @@ package app
 
 import (
 	"io/ioutil"
-	"path"
 	"sync"
-
-	"github.com/fsnotify/fsnotify"
+	"time"
 )
 
-type SecretWatcher struct {
-	basePath string
-	watcher  *fsnotify.Watcher
-	lock     sync.RWMutex
-	pointers map[string]*string
+// UpdatableString is the interface that expose a getter for a value and an update method
+type UpdatableString interface {
+	// Update query for a new information and then returns true if the value changed from last
+	// update, false otherwise
+	Update() bool
+
+	// returns the current value
+	String() string
 }
 
-func NewSecretWatcher(path string) *SecretWatcher {
-	return &SecretWatcher{
-		basePath: path,
-		pointers: map[string]*string{},
+type valueFromFile struct {
+	filename string
+
+	currentValue string
+}
+
+func (vff *valueFromFile) Update() bool {
+	changed := false
+	if content, err := ioutil.ReadFile(vff.filename); err == nil {
+		if current := string(content); vff.currentValue != current {
+			changed = true
+			vff.currentValue = current
+		}
+	} else {
+		log.Error(err, "fail to read the file", "file", vff.filename)
+	}
+
+	return changed
+}
+
+func (vff *valueFromFile) String() string {
+	return vff.currentValue
+}
+
+// GetValueFromFile returns a UpdatebleValue that gets it's value from provided filename
+func GetValueFromFile(filename string) UpdatableString {
+	return &valueFromFile{
+		filename: filename,
 	}
 }
 
-func (w *SecretWatcher) Start(stop <-chan struct{}) error {
-	watcher, err := fsnotify.NewWatcher()
-	if err != nil {
-		return err
+// UpdateAll given UpdatableString and returns true if any of them has updated
+func UpdateAll(vars ...UpdatableString) bool {
+	changed := false
+	for _, v := range vars {
+		changed = changed || v.Update()
 	}
-	w.watcher = watcher
 
+	return changed
+}
+
+// Observer is a function that is called (notified) by the reconcieLoop (Subject)
+type Observer func(cfg *MysqlConfig) error
+
+// Subject the interface to handle Observers
+type Subject interface {
+	Start(stop <-chan struct{})
+	AddObserver(string, Observer)
+}
+
+type reconcileLoop struct {
+	cfg *MysqlConfig
+
+	observers *sync.Map
+}
+
+// NewSubject returns an object that implements Subject interface
+func NewSubject(cfg *MysqlConfig) Subject {
+	return &reconcileLoop{
+		cfg:       cfg,
+		observers: &sync.Map{},
+	}
+}
+
+func (rl *reconcileLoop) Start(stop <-chan struct{}) {
 	go func() {
 		for {
 			select {
 			case <-stop:
-				// close the watcher when shuting down
-				w.watcher.Close()
 				return
-			case event := <-w.watcher.Events:
-				if event.Op&fsnotify.Write == fsnotify.Write {
-					// secret was modified
-					w.updateFromFile(event.Name)
-				}
-			case err := <-w.watcher.Errors:
-				log.Error(err, "fsnotify error")
+			case <-time.After(rl.cfg.ReconcileTime):
+				rl.notifyObservers()
 			}
 		}
 	}()
-
-	return nil
 }
 
-func (w *SecretWatcher) pathToFile(key string) string {
-	return path.Join(w.basePath, key)
+func (rl *reconcileLoop) notifyObservers() {
+	rl.observers.Range(func(nameArg interface{}, obsArg interface{}) bool {
+		name := nameArg.(string)
+		obs := obsArg.(Observer)
+		// call the observer
+		rl.notifyObserver(name, obs)
+		return true
+	})
 }
 
-func (w *SecretWatcher) WatchFor(key string) *string {
-	// initialize an empty string
-	emptyStr := ""
-	value := &emptyStr
-
-	if envValue := getEnvP(key); envValue != nil {
-		*value = *envValue
-	}
-
-	// get the secret file path
-	path := w.pathToFile(key)
-
-	// link secret address to file path
-	w.registerPointerFor(path, value)
-
-	// update from file the secret
-	w.updateFromFile(path)
-
-	// add file to watcher
-	if err := w.watcher.Add(path); err != nil {
-		log.Error(err, "failed to add secret to fsnotify", "file", path)
-	}
-
-	return value
-}
-
-// updateFromFile get the registered pointer for given file, reads the content of the file and
-// writes it at that pointer
-func (w *SecretWatcher) updateFromFile(file string) {
-	ptr := w.getPointerFor(file)
-	if content, err := ioutil.ReadFile(file); err == nil {
-		*ptr = string(content)
-	} else {
-		log.Error(err, "fail to read the file", "file", file)
+func (rl *reconcileLoop) notifyObserver(name string, obs Observer) {
+	log.V(1).Info("notifying observer", "name", name)
+	if err := obs(rl.cfg); err != nil {
+		log.Error(err, "observer faild to execute", "name", name)
 	}
 }
 
-func (w *SecretWatcher) getPointerFor(file string) *string {
-	w.lock.RLock()
-	defer w.lock.RUnlock()
-	p, ok := w.pointers[file]
-	if !ok {
-		log.Info("file not registered", "file", file)
-	}
-	return p
-}
+func (rl *reconcileLoop) AddObserver(name string, obs Observer) {
+	rl.observers.Store(name, obs)
 
-func (w *SecretWatcher) registerPointerFor(file string, ptr *string) {
-	w.lock.Lock()
-	defer w.lock.Unlock()
-	w.pointers[file] = ptr
+	rl.notifyObserver(name, obs)
+	log.Info("successfuly added observer", "name", name)
 }

@@ -93,13 +93,9 @@ func main() {
 		Use:   "run",
 		Short: "Configs mysql users, replication, and serve backups.",
 		Run: func(cmd *cobra.Command, args []string) {
-			mysqlCFG, err := app.NewMysqlConfig(cfg)
-			if err != nil {
-				log.Error(err, "run command failed when configuring")
-				os.Exit(1)
-			}
+			mysqlCFG := app.NewMysqlConfig(cfg)
 
-			err = apphelper.RunRunCommand(mysqlCFG)
+			err := apphelper.RunRunCommand(mysqlCFG)
 			if err != nil {
 				log.Error(err, "run command failed")
 				os.Exit(1)

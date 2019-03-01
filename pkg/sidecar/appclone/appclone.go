@@ -32,7 +32,7 @@ var log = logf.Log.WithName("sidecar.appclone")
 // RunCloneCommand clone the data from source.
 // nolint: gocyclo
 func RunCloneCommand(cfg *app.BaseConfig) error {
-	log.Info("clonning command", "host", cfg.Hostname)
+	log.Info("clonning command", "host", cfg.Hostname, "role", cfg.NodeRole)
 
 	// skip cloning if data exists.
 	if !app.ShouldBootstrapNode() {
@@ -69,7 +69,7 @@ func RunCloneCommand(cfg *app.BaseConfig) error {
 			}
 		} else {
 			return fmt.Errorf(
-				"failed to initialize because no of no prior node exists, check orchestrator maybe",
+				"failed to initialize because no prior node exists, check orchestrator maybe",
 			)
 		}
 	}
